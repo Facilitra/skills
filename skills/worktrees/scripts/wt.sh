@@ -102,10 +102,15 @@ slugify() {
   local s=$1
   s=$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')
   s=${s//$'\r'/}
-  s=$(printf '%s' "$s" | LC_ALL=C sed -e 's/[^a-z0-9]\+/-/g' -e 's/-\+/-/g' -e 's/^-//' -e 's/-$//')
+  # tr, not sed: `\+` is a GNU extension. BSD sed (macOS) reads it as a literal '+',
+  # so the pattern matched almost nothing and the name passed through UNSANITIZED,
+  # straight into `git worktree add`. -c complements the set, -s squeezes each run of
+  # rejected characters into a single dash, which covers both old substitutions.
+  s=$(printf '%s' "$s" | LC_ALL=C tr -cs 'a-z0-9' '-')
+  s=${s#-}
+  s=${s%-}
   s=${s:0:48}
   s=${s%-}
-  s=${s%.}
   [ -n "$s" ] || die "the name is empty after sanitizing; use letters and digits"
   if printf '%s' "$s" | grep -Eq "$RESERVED"; then s="wt-$s"; fi
   printf '%s' "$s"
