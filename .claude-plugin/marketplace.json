@@ -13,6 +13,8 @@
       "version": "1.0.0",
       "author": { "name": "Facilitra" },
       "repository": "https://github.com/Facilitra/skills",
+      "license": "MIT",
+      "keywords": ["git", "worktree", "architecture", "documentation"],
       "skills": ["./skills/worktrees", "./skills/mapping-architecture"],
       "strict": false
     }
