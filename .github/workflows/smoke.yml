@@ -1,0 +1,171 @@
+name: smoke
+
+# The worktree scripts are the only executable content in this repo, and the bug class
+# they keep hitting is platform-specific (path separators, MSYS vs Windows path forms).
+# So both scripts run the same lifecycle on both platforms, and the assertions are on
+# what the script SAYS, not just on its exit code: `doctor` reporting a freshly created
+# worktree as MISPLACED still exits 0.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bash:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lifecycle
+        run: |
+          set -euo pipefail
+          WT="$PWD/skills/worktrees/scripts/wt.sh"
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          git config --global init.defaultBranch main
+
+          mkdir -p lab/demo && cd lab/demo
+          git init -q . && echo hi > a.txt && git add -A && git commit -qm init
+
+          echo "== new: name is sanitized =="
+          P=$(bash "$WT" new "Feature/Login API!!" --task "issue 412")
+          case "$P" in *feature-login-api) ;; *) echo "FAIL: bad slug: $P"; exit 1 ;; esac
+          [ -d "$P" ] || { echo "FAIL: not created: $P"; exit 1; }
+
+          echo "== new again: reuses, does not fail =="
+          P2=$(bash "$WT" new "Feature/Login API!!")
+          [ "$P" = "$P2" ] || { echo "FAIL: not reused: $P2"; exit 1; }
+
+          echo "== reserved name gets the wt- prefix =="
+          bash "$WT" new CON >/dev/null
+          bash "$WT" list | grep -q 'wt-con' || { echo "FAIL: reserved name not prefixed"; exit 1; }
+
+          echo "== list: nothing is flagged OUTSIDE-ROOT =="
+          bash "$WT" list
+          bash "$WT" list | grep -q 'OUTSIDE-ROOT' && { echo "FAIL: in-root worktree flagged outside"; exit 1; }
+
+          echo "== doctor: all clear =="
+          bash "$WT" doctor
+          bash "$WT" doctor | grep -q '^all clear$' || { echo "FAIL: doctor not clear on a clean repo"; exit 1; }
+
+          echo "== rm refuses to discard uncommitted work =="
+          echo dirty > "$P/scratch.txt"
+          if bash "$WT" rm feature-login-api 2>/dev/null; then echo "FAIL: removed a dirty worktree"; exit 1; fi
+          rm -f "$P/scratch.txt"
+
+          echo "== rm from INSIDE the worktree, and the registry entry goes with it =="
+          (cd "$P" && bash "$WT" rm feature-login-api)
+          [ -d "$P" ] && { echo "FAIL: still on disk: $P"; exit 1; }
+
+          echo "== doctor is still clean: no phantom registry entry left behind =="
+          bash "$WT" doctor
+          bash "$WT" doctor | grep -q 'STALE REGISTRY' && { echo "FAIL: phantom registry entry"; exit 1; }
+
+          echo "== clean: dry run deletes nothing =="
+          bash "$WT" clean | grep -q 'WOULD DELETE' || { echo "FAIL: dry run listed nothing"; exit 1; }
+          bash "$WT" list | grep -q 'wt-con' || { echo "FAIL: dry run actually deleted"; exit 1; }
+
+          echo "== clean --yes sweeps the rest =="
+          bash "$WT" clean --yes
+          [ -z "$(bash "$WT" list)" ] || { echo "FAIL: leftovers"; bash "$WT" list; exit 1; }
+
+          echo "PASS"
+
+  powershell:
+    runs-on: windows-latest
+    defaults:
+      run: { shell: pwsh }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lifecycle
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $WT = Join-Path $PWD 'skills\worktrees\scripts\wt.ps1'
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          git config --global init.defaultBranch main
+
+          New-Item -ItemType Directory -Force lab\demo | Out-Null
+          Set-Location lab\demo
+          git init -q .; 'hi' | Set-Content a.txt; git add -A; git commit -qm init
+
+          function Fail($m) { Write-Host "FAIL: $m"; exit 1 }
+
+          Write-Host '== new: name is sanitized =='
+          $P = & $WT new "Feature/Login API!!" --task "issue 412"
+          if ($P -notmatch 'feature-login-api$') { Fail "bad slug: $P" }
+          if (-not (Test-Path -LiteralPath $P)) { Fail "not created: $P" }
+
+          Write-Host '== new again: reuses, does not fail =='
+          $P2 = & $WT new "Feature/Login API!!"
+          if ($LASTEXITCODE -ne 0) { Fail 'reuse exited non-zero' }
+          if ($P2 -ne $P) { Fail "not reused: $P2" }
+
+          Write-Host '== registry carries both timestamp fields =='
+          $meta = Get-Content (Join-Path (Split-Path -Parent $P) '.registry\feature-login-api.json') -Raw | ConvertFrom-Json
+          if (-not $meta.created_epoch) { Fail 'created_epoch missing (wt.sh reads it)' }
+          if (-not $meta.created_at)    { Fail 'created_at missing' }
+          if ([long]$meta.created_epoch -lt 1600000000) { Fail "nonsense epoch: $($meta.created_epoch)" }
+
+          Write-Host '== reserved name gets the wt- prefix =='
+          & $WT new CON | Out-Null
+          if (-not (& $WT list | Select-String -Quiet 'wt-con')) { Fail 'reserved name not prefixed' }
+
+          Write-Host '== list: nothing is flagged OUTSIDE-ROOT =='
+          & $WT list
+          if (& $WT list | Select-String -Quiet 'OUTSIDE-ROOT') { Fail 'in-root worktree flagged outside' }
+
+          Write-Host '== doctor: all clear =='
+          & $WT doctor
+          if (-not (& $WT doctor | Select-String -Quiet '^all clear$')) { Fail 'doctor not clear on a clean repo' }
+
+          Write-Host '== rm refuses to discard uncommitted work =='
+          'dirty' | Set-Content (Join-Path $P 'scratch.txt')
+          & $WT rm feature-login-api 2>$null
+          if ($LASTEXITCODE -eq 0) { Fail 'removed a dirty worktree' }
+          Remove-Item (Join-Path $P 'scratch.txt') -Force
+
+          Write-Host '== rm from INSIDE the worktree, registry entry goes with it =='
+          Push-Location $P; & $WT rm feature-login-api; Pop-Location
+          if (Test-Path -LiteralPath $P) { Fail "still on disk: $P" }
+          & $WT doctor
+          if (& $WT doctor | Select-String -Quiet 'STALE REGISTRY') { Fail 'phantom registry entry' }
+
+          Write-Host '== clean: dry run deletes nothing =='
+          if (-not (& $WT clean | Select-String -Quiet 'WOULD DELETE')) { Fail 'dry run listed nothing' }
+          if (-not (& $WT list | Select-String -Quiet 'wt-con')) { Fail 'dry run actually deleted' }
+
+          Write-Host '== clean --yes sweeps the rest =='
+          & $WT clean --yes
+          if (@(& $WT list).Count -ne 0) { & $WT list; Fail 'leftovers' }
+
+          Write-Host 'PASS'
+
+  marketplace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Manifest is valid JSON and lists every skill directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, pathlib, sys
+          m = json.loads(pathlib.Path('.claude-plugin/marketplace.json').read_text())
+          declared = {pathlib.Path(s).name for p in m['plugins'] for s in p.get('skills', [])}
+          ondisk = {p.parent.name for p in pathlib.Path('skills').glob('*/SKILL.md')}
+          if declared != ondisk:
+              sys.exit(f"manifest lists {sorted(declared)} but disk has {sorted(ondisk)}")
+          for p in pathlib.Path('skills').glob('*/SKILL.md'):
+              head = p.read_text(encoding='utf-8').split('---')
+              if len(head) < 3 or 'name:' not in head[1] or 'description:' not in head[1]:
+                  sys.exit(f"{p}: missing frontmatter name/description")
+          print("ok:", sorted(ondisk))
+          PY

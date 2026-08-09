@@ -57,12 +57,7 @@ A worktree contains only tracked content. No `node_modules`, `.venv`, `target/`,
 
 Copy what is needed explicitly (`cp ../repo/.env .`) and mention it to the user, because copying secrets into a new directory is their decision, not yours.
 
-For dependencies, **install inside the worktree; never symlink or junction a shared `node_modules` into it.** Two independent reasons:
-
-1. **Deletion hazard.** A recursive delete follows the link and empties the target, so removing the worktree destroys the main repo's `node_modules`. The scripts strip links before deleting for exactly this reason, but a manual `rm -rf` still bites.
-2. **Correctness.** Packages that compile native binaries, and tooling that resolves paths through `realpath` (bundlers, jest, eslint plugin resolution), misbehave when `node_modules` lives outside the project root.
-
-If installs are too slow, share through a store rather than a link: pnpm's content-addressable store, or a warm npm/yarn cache with `npm ci`. Both give most of the speed with none of the risk.
+For dependencies, **install inside the worktree; never symlink or junction a shared `node_modules` into it.** SKILL.md gives the deletion hazard and the safe ways to share a store; the second, independent reason belongs here: packages that compile native binaries, and tooling that resolves paths through `realpath` (bundlers, jest, eslint plugin resolution), misbehave when `node_modules` lives outside the project root. So even where the delete hazard does not apply, the link is still wrong.
 
 The same applies to `.venv`, `target/`, `vendor/`, `.gradle` and any other heavy shared directory.
 

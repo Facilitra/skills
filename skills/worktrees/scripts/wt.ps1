@@ -16,12 +16,15 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'   # git warns on stderr; we check $LASTEXITCODE instead
-$script:Version = '1.0.0'
+$script:Version = '1.1.0'
 $script:Reserved = @('con','prn','aux','nul') + (1..9 | ForEach-Object { "com$_"; "lpt$_" })
 
 # ---------------------------------------------------------------- helpers
 
-function Die([string]$Message) { Write-Error $Message; exit 1 }
+# Throws rather than exits: a refusal inside a batch command (clean) must skip one
+# worktree, not terminate the sweep and leave the rest silently unprocessed. The
+# top-level dispatcher turns an uncaught throw back into "print to stderr, exit 1".
+function Die([string]$Message) { throw $Message }
 function Info([string]$Message) { Write-Host $Message -ForegroundColor DarkGray }
 
 function Invoke-Git {
@@ -97,18 +100,26 @@ function ConvertTo-Slug {
   return $s
 }
 
+# git emits FORWARD slashes on Windows ("C:/dev/repo") while Get-WtRoot produces
+# backslashes. Comparing the two raw makes every in-root test false, which reported
+# correctly placed worktrees as MISPLACED and ORPHAN and broke `new`'s reuse check.
+# Normalize here, once, so every caller compares like with like.
+function ConvertTo-FullPath { param([string]$Path)
+  try { return ([System.IO.Path]::GetFullPath($Path)).TrimEnd('\') } catch { return $Path }
+}
+
 function Get-WorktreePaths {
   # All but the main one
   $lines = Get-GitLines @('worktree','list','--porcelain')
   $paths = @()
-  foreach ($l in $lines) { if ($l -like 'worktree *') { $paths += $l.Substring(9).Trim() } }
+  foreach ($l in $lines) { if ($l -like 'worktree *') { $paths += ConvertTo-FullPath $l.Substring(9).Trim() } }
   if ($paths.Count -le 1) { return @() }
   return $paths[1..($paths.Count - 1)]
 }
 
 function Get-MainWorktree {
   $lines = Get-GitLines @('worktree','list','--porcelain')
-  foreach ($l in $lines) { if ($l -like 'worktree *') { return $l.Substring(9).Trim() } }
+  foreach ($l in $lines) { if ($l -like 'worktree *') { return (ConvertTo-FullPath $l.Substring(9).Trim()) } }
   return $null
 }
 
@@ -203,6 +214,11 @@ function Get-AgeDays { param([string]$Path)
     try {
       $meta = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
       if ($meta.created_at) { return [int]((Get-Date) - [datetime]$meta.created_at).TotalDays }
+      # wt.sh-created entries may carry only the epoch field
+      if ($meta.created_epoch) {
+        $nowEpoch = [long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds
+        return [int](($nowEpoch - [long]$meta.created_epoch) / 86400)
+      }
     } catch { }
   }
   if (Test-Path -LiteralPath $Path) {
@@ -213,11 +229,9 @@ function Get-AgeDays { param([string]$Path)
 
 function Resolve-WorktreePath {
   param([string]$Target)
-  if (Test-Path -LiteralPath $Target -PathType Container) {
-    return ([System.IO.Path]::GetFullPath($Target)).TrimEnd('\')
-  }
+  if (Test-Path -LiteralPath $Target -PathType Container) { return (ConvertTo-FullPath $Target) }
   $candidate = Join-Path (Get-WtRoot) $Target
-  if (Test-Path -LiteralPath $candidate -PathType Container) { return $candidate }
+  if (Test-Path -LiteralPath $candidate -PathType Container) { return (ConvertTo-FullPath $candidate) }
   foreach ($p in Get-WorktreePaths) {
     if ((Split-Path -Leaf $p) -eq $Target) { return $p }
   }
@@ -278,6 +292,12 @@ function Cmd-New {
   $meta = [ordered]@{
     slug = $slug; path = $path; branch = $branch; base = $base
     task = [string]$p.Flags.task; repo = $repo
+    # Both fields, because wt.sh reads created_epoch and this script reads created_at.
+    # Writing only one makes --older-than fall back to filesystem timestamps when the
+    # two scripts are mixed on the same repo, and those reset on copy.
+    # [long] straight off the TimeSpan: going via a string would be parsed with the
+    # current culture, and a comma-decimal locale turns 1786301985.01 into 178630198501.
+    created_epoch = [string][long]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds
     created_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   }
   ($meta | ConvertTo-Json) | Set-Content -LiteralPath (Join-Path (Get-RegistryDir) "$slug.json") -Encoding UTF8
@@ -343,18 +363,34 @@ function Cmd-Remove {
   }
 
   Remove-Links $path | Out-Null
-  $gitArgs = @('worktree','remove')
+  # Every git call runs against the main repo: the skill tells you to Set-Location into
+  # the worktree to work, and `git worktree remove` fails when run from inside its target.
+  $repo = Get-RepoRoot
+
+  # Windows locks a directory that is some process's working directory, so removing the
+  # worktree you are standing in fails with "Permission denied" no matter which repo git
+  # is pointed at. Step out first. POSIX shells do not need this; Windows does.
+  $here = (Get-Location).ProviderPath.TrimEnd('\')
+  if ($here -eq $path -or $here.StartsWith($path + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    Set-Location $repo
+    [Environment]::CurrentDirectory = $repo
+    Info "moved out of $path (it is being removed); you are now in $repo"
+  }
+  # Resolved BEFORE the removal: Get-RegistryDir walks up through Get-RepoRoot, and if
+  # the caller is standing inside the worktree being deleted, cwd no longer exists by
+  # then, so the lookup fails and the entry survives as a phantom.
+  $meta = Join-Path (Get-RegistryDir) ((Split-Path -Leaf $path) + '.json')
+  $gitArgs = @('-C',$repo,'worktree','remove')
   if ($force) { $gitArgs += '--force' }
   $gitArgs += $path
   $out = Invoke-Git $gitArgs
   if ($script:GitExit -ne 0) { Die "could not remove ${path}: $out" }
 
-  $meta = Join-Path (Get-RegistryDir) ((Split-Path -Leaf $path) + '.json')
   if (Test-Path -LiteralPath $meta) { Remove-Item -LiteralPath $meta -Force }
-  Invoke-Git @('worktree','prune') | Out-Null
+  Invoke-Git @('-C',$repo,'worktree','prune') | Out-Null
 
   if ($p.Flags.'delete-branch' -and $branch -ne '(detached)') {
-    Invoke-Git @('branch','-D',$branch) | Out-Null
+    Invoke-Git @('-C',$repo,'branch','-D',$branch) | Out-Null
     if ($script:GitExit -eq 0) { Info "branch $branch deleted" }
   }
   Info "removed: $path"
@@ -379,11 +415,16 @@ function Cmd-Clean {
   }
 
   if ($removable.Count -eq 0) { Info "nothing to clean (kept: $kept)"; Invoke-Git @('worktree','prune') | Out-Null; return }
+  $failed = 0
   foreach ($path in $removable) {
-    if ($yes) { Cmd-Remove @($path) }
+    if ($yes) {
+      # One refusal must not abort the sweep and leave the rest silently untouched.
+      try { Cmd-Remove @($path) } catch { $failed++; Info "SKIPPED ${path}: $($_.Exception.Message)" }
+    }
     else { Write-Output "WOULD DELETE $path" }
   }
   if (-not $yes) { Info 'dry run: repeat with --yes to execute' }
+  elseif ($failed -gt 0) { Info "$failed worktree(s) skipped; see the messages above" }
   Invoke-Git @('worktree','prune') | Out-Null
 }
 
@@ -454,6 +495,7 @@ function Cmd-Doctor {
       try {
         $meta = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
         if (-not (Test-Path -LiteralPath $meta.path)) {
+          $problems++
           if ($fix) { Remove-Item -LiteralPath $f.FullName -Force; Write-Output "STALE REGISTRY ENTRY DELETED: $($f.Name)" }
           else { Write-Output "STALE REGISTRY ENTRY: $($f.Name)" }
         }
@@ -491,16 +533,22 @@ Worktree root (by precedence):
 '@ | Write-Output
 }
 
-switch ($Command.ToLowerInvariant()) {
-  'new'     { Cmd-New $Rest }
-  'list'    { Cmd-List $Rest }
-  'ls'      { Cmd-List $Rest }
-  'rm'      { Cmd-Remove $Rest }
-  'remove'  { Cmd-Remove $Rest }
-  'clean'   { Cmd-Clean $Rest }
-  'doctor'  { Cmd-Doctor $Rest }
-  'path'    { $r = Resolve-WorktreePath $Rest[0]; if (-not $r) { Die "cannot find '$($Rest[0])'" }; Write-Output $r }
-  'root'    { Write-Output (Get-WtRoot) }
-  'version' { Write-Output $script:Version }
-  default   { Cmd-Help }
+try {
+  switch ($Command.ToLowerInvariant()) {
+    'new'     { Cmd-New $Rest }
+    'list'    { Cmd-List $Rest }
+    'ls'      { Cmd-List $Rest }
+    'rm'      { Cmd-Remove $Rest }
+    'remove'  { Cmd-Remove $Rest }
+    'clean'   { Cmd-Clean $Rest }
+    'doctor'  { Cmd-Doctor $Rest }
+    'path'    { $r = Resolve-WorktreePath $Rest[0]; if (-not $r) { Die "cannot find '$($Rest[0])'" }; Write-Output $r }
+    'root'    { Write-Output (Get-WtRoot) }
+    'version' { Write-Output $script:Version }
+    default   { Cmd-Help }
+  }
+} catch {
+  # Die throws so batch commands can catch it; anything reaching here is fatal.
+  [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+  exit 1
 }

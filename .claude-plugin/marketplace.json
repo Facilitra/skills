@@ -10,7 +10,7 @@
       "name": "facilitra-skills",
       "source": "./",
       "description": "Git worktree management and architecture mapping skills",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": { "name": "Facilitra" },
       "repository": "https://github.com/Facilitra/skills",
       "license": "MIT",

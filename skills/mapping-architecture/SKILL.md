@@ -47,7 +47,9 @@ Write recon output to a scratch file. It becomes the shared brief for step 2.
 
 ### 2. Fan out - one agent per dimension
 
-Use superpowers:dispatching-parallel-agents. Give every agent the recon brief and the same contract: return findings as records with the three fields above.
+Use `superpowers:dispatching-parallel-agents` if that plugin is installed. It is an **optional** dependency and not part of this marketplace: if the skill is unavailable, dispatch the agents directly (one Task/Agent call per dimension, all in one message so they run concurrently) and the workflow is unchanged. Do not stop to install anything.
+
+Give every agent the recon brief and the same contract: return findings as records with the three fields above.
 
 | Dimension | Question it answers |
 |---|---|
@@ -122,7 +124,7 @@ Section 10 is required even when short. A page hiding its own blind spots is wor
 
 ### 5. Offer to publish
 
-The page is a local file. State the path. If the user wants a shareable URL, load `artifact-design`, then make a body-only copy - strip `<!doctype>`, `<html>`, `<head>`, `<body>`, keep the `<style>` block - and publish that with the Artifact tool.
+The page is a local file. State the path. If the user wants a shareable URL, load `artifact-design` if available, then make a body-only copy - strip `<!doctype>`, `<html>`, `<head>`, `<body>`, keep the `<style>` block - and publish that with the Artifact tool. Where there is no Artifact tool, the local file is the deliverable; say so instead of looking for somewhere to host it.
 
 ## The dependency explorer
 
@@ -162,7 +164,7 @@ Write **inline SVG or HTML/CSS boxes**. Nothing else survives both contexts:
 | Mermaid via CDN script | works | blocked by CSP |
 | Mermaid fenced block | renders as literal text | works |
 
-The template ships CSS for layered box diagrams, which covers most layer and module maps with no SVG at all. Reach for inline SVG only when you need real edges with arrowheads, and load `artifact-diagramming` first.
+The template ships CSS for layered box diagrams, which covers most layer and module maps with no SVG at all. Reach for inline SVG only when you need real edges with arrowheads, and load `artifact-diagramming` first if it is available.
 
 ## Common Mistakes
 

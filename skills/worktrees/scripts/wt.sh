@@ -3,7 +3,7 @@
 # Usage: ./wt.sh <command> [args]   |   ./wt.sh help
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # ---------------------------------------------------------------- helpers
 
@@ -102,10 +102,15 @@ slugify() {
   local s=$1
   s=$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')
   s=${s//$'\r'/}
-  s=$(printf '%s' "$s" | LC_ALL=C sed -e 's/[^a-z0-9]\+/-/g' -e 's/-\+/-/g' -e 's/^-//' -e 's/-$//')
+  # tr, not sed: `\+` is a GNU extension. BSD sed (macOS) reads it as a literal '+',
+  # so the pattern matched almost nothing and the name passed through UNSANITIZED,
+  # straight into `git worktree add`. -c complements the set, -s squeezes each run of
+  # rejected characters into a single dash, which covers both old substitutions.
+  s=$(printf '%s' "$s" | LC_ALL=C tr -cs 'a-z0-9' '-')
+  s=${s#-}
+  s=${s%-}
   s=${s:0:48}
   s=${s%-}
-  s=${s%.}
   [ -n "$s" ] || die "the name is empty after sanitizing; use letters and digits"
   if printf '%s' "$s" | grep -Eq "$RESERVED"; then s="wt-$s"; fi
   printf '%s' "$s"
@@ -272,7 +277,10 @@ resolve_path() {
   # accepts a slug or a path
   local want=$1 root p
   root=$(wt_root)
-  if [ -d "$want" ]; then (cd "$want" && pwd); return 0; fi
+  # normalize_path, not `cd && pwd`: under Git Bash pwd answers in MSYS form
+  # (/tmp/...), which does not match the C:/... paths git and wt_root use, so the
+  # resolved path printed back to the user names a location they cannot find.
+  if [ -d "$want" ]; then normalize_path "$want"; return 0; fi
   if [ -d "$root/$want" ]; then printf '%s' "$root/$want"; return 0; fi
   while IFS= read -r p; do
     [ "$(basename "$p")" = "$want" ] && { printf '%s' "$p"; return 0; }
@@ -291,22 +299,30 @@ cmd_rm() {
     esac
   done
   [ -n "$target" ] || die "usage: wt rm <slug|path> [--force] [--delete-branch]"
-  local path b un
+  local path b un repo
   path=$(resolve_path "$target") || die "cannot find worktree '$target' (try: wt list)"
   b=$(branch_of "$path")
   un=$(unpushed_count "$path")
+  # Every git call runs against the main repo: the skill tells you to cd into the
+  # worktree to work, and `git worktree remove` fails when run from inside its target.
+  repo=$(repo_root)
 
   if [ "$force" != 1 ]; then
     is_dirty "$path" && die "'$path' has uncommitted changes. Review them with: git -C \"$path\" status. Use --force to discard them."
     [ "${un:-0}" -gt 0 ] && die "'$path' has $un unpushed commit(s) on '$b'. Push the branch or use --force."
   fi
 
+  # Resolved BEFORE the removal: registry_dir walks up through repo_root, and if the
+  # caller is standing inside the worktree being deleted, cwd no longer exists by then,
+  # so the lookup fails and the entry survives as a phantom.
+  local meta="$(registry_dir)/$(basename "$path").json"
+
   strip_links "$path"
-  git worktree remove ${force:+--force} "$path" || die "could not remove $path"
-  rm -f "$(registry_dir)/$(basename "$path").json"
-  git worktree prune
+  git -C "$repo" worktree remove ${force:+--force} "$path" || die "could not remove $path"
+  rm -f "$meta"
+  git -C "$repo" worktree prune
   if [ "$delbranch" = 1 ] && [ -n "$b" ] && [ "$b" != "(detached)" ]; then
-    git branch -D "$b" >/dev/null 2>&1 && info "branch $b deleted"
+    git -C "$repo" branch -D "$b" >/dev/null 2>&1 && info "branch $b deleted"
   fi
   info "removed: $path"
 }
@@ -347,14 +363,21 @@ cmd_clean() {
     git worktree prune
     return 0
   fi
+  local failed=0
   for p in "${removable[@]}"; do
     if [ "$yes" = 1 ]; then
-      cmd_rm "$p"
+      # Subshell: cmd_rm dies (exits) when it refuses, and one refusal must not abort
+      # the sweep and leave the remaining worktrees silently unprocessed.
+      ( cmd_rm "$p" ) || { failed=$((failed+1)); info "SKIPPED $p"; }
     else
       printf 'WOULD DELETE %s (%s)\n' "$p" "$(branch_of "$p")"
     fi
   done
-  [ "$yes" = 1 ] || info "dry run: repeat with --yes to execute"
+  if [ "$yes" = 1 ]; then
+    [ "$failed" -eq 0 ] || info "$failed worktree(s) skipped; see the messages above"
+  else
+    info "dry run: repeat with --yes to execute"
+  fi
   git worktree prune
 }
 
@@ -441,8 +464,12 @@ cmd_doctor() {
       [ -f "$p" ] || continue
       local rp; rp=$(json_get "$p" path)
       if [ ! -d "$rp" ]; then
-        [ "$fix" = 1 ] && rm -f "$p" && printf 'STALE REGISTRY ENTRY DELETED: %s\n' "$(basename "$p")" \
-          || printf 'STALE REGISTRY ENTRY: %s\n' "$(basename "$p")"
+        problems=$((problems+1))
+        if [ "$fix" = 1 ] && rm -f "$p"; then
+          printf 'STALE REGISTRY ENTRY DELETED: %s\n' "$(basename "$p")"
+        else
+          printf 'STALE REGISTRY ENTRY: %s\n' "$(basename "$p")"
+        fi
       fi
     done
   fi
