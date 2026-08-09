@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{PROJECT}} - Architecture</title>
+<style>
+/*
+  Standalone architecture page. No external requests - safe offline and under a strict CSP.
+  To publish as an Artifact: keep this style block and the page content, drop the document wrapper
+  (doctype, html, head, body). Those tag names are spelled out rather than written literally here,
+  because a literal one inside this comment is the first match any wrapper-stripping regex finds.
+*/
+/*
+  Neutrals carry a slight warm bias rather than sitting on pure grey, so the greys read as chosen.
+  The accent is deliberately NOT in the red family: red, amber and green are reserved as semantic
+  severity colours for findings, and an accent sharing that hue would blur signal into decoration.
+*/
+:root {
+  --bg: #fdfcfc; --panel: #f6f4f4; --line: #e3dedd;
+  --fg: #1a1717; --muted: #6b6260; --accent: #3b3f9e;
+  --ok: #1a7f4b; --warn: #9a6207; --risk: #b3261e;
+  --code: #efebea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141112; --panel: #1c1819; --line: #2e2829;
+    --fg: #eae6e5; --muted: #a09794; --accent: #9aa0ff;
+    --ok: #4ec98a; --warn: #e0aa4a; --risk: #ff8a80;
+    --code: #221d1e;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #fdfcfc; --panel: #f6f4f4; --line: #e3dedd;
+  --fg: #1a1717; --muted: #6b6260; --accent: #3b3f9e;
+  --ok: #1a7f4b; --warn: #9a6207; --risk: #b3261e; --code: #efebea;
+}
+:root[data-theme="dark"] {
+  --bg: #141112; --panel: #1c1819; --line: #2e2829;
+  --fg: #eae6e5; --muted: #a09794; --accent: #9aa0ff;
+  --ok: #4ec98a; --warn: #e0aa4a; --risk: #ff8a80; --code: #221d1e;
+}
+
+/* The explorer is keyboard-operable, so focus must be visible on both the list and the SVG nodes. */
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+a { color: var(--accent); }
+code, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .87em; }
+
+/* ---- 1. Header ---- */
+header { border-bottom: 1px solid var(--line); padding-bottom: 1.75rem; margin-bottom: 2.5rem; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin: 0 0 .4rem; letter-spacing: -.02em; text-wrap: balance; }
+.purpose { color: var(--muted); font-size: 1.05rem; margin: 0 0 1.1rem; max-width: 60ch; }
+.badges { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+.badge {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  padding: .18rem .7rem; font-size: .78rem; color: var(--muted);
+}
+.stamp { font-size: .8rem; color: var(--muted); }
+
+/* ---- 2. Stat tiles ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+.tile .n { font-size: 1.9rem; font-weight: 650; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .l { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ---- Sections ---- */
+section { margin-top: 3rem; }
+h2 { font-size: 1.3rem; margin: 0 0 1rem; display: flex; align-items: baseline; gap: .6rem; }
+h2::before {
+  content: counter(sec); counter-increment: sec;
+  font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  border: 1px solid var(--line); border-radius: 6px; padding: .05rem .45rem;
+}
+body { counter-reset: sec; }
+h3 { font-size: .95rem; margin: 1.75rem 0 .6rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ---- Tables ---- */
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: .9rem; }
+th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--panel); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+
+/* ---- Evidence chips: REQUIRED on every claim ---- */
+.ev {
+  font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+  background: var(--code); border: 1px solid var(--line); border-radius: 5px;
+  padding: .08rem .4rem; color: var(--muted); white-space: nowrap;
+}
+.inferred { color: var(--warn); font-size: .75rem; font-weight: 600; letter-spacing: .04em; }
+.inferred::before { content: "~ INFERRED "; }
+
+/* ---- Layer / module diagram (pure CSS, no SVG needed) ---- */
+.layers { display: flex; flex-direction: column; gap: .55rem; }
+.layer {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .85rem 1rem;
+}
+.layer > .name { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .55rem; }
+.nodes { display: flex; flex-wrap: wrap; gap: .45rem; }
+.node {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+  padding: .4rem .7rem; font-size: .85rem;
+}
+.node small { display: block; color: var(--muted); font-size: .72rem; }
+.arrow { text-align: center; color: var(--muted); font-size: .85rem; line-height: 1; }
+.layer.violation { border-color: var(--risk); }
+
+/* ---- Findings ---- */
+.finding {
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--muted);
+  border-radius: 8px; padding: .9rem 1rem; margin-bottom: .7rem;
+}
+.finding.risk { border-left-color: var(--risk); }
+.finding.warn { border-left-color: var(--warn); }
+.finding.ok   { border-left-color: var(--ok); }
+.finding .t { font-weight: 600; margin-bottom: .3rem; text-wrap: balance; }
+.finding p { margin: .3rem 0 .5rem; color: var(--muted); font-size: .92rem; }
+
+/* ---- Dependency explorer ---- */
+.explorer { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.ego { background: var(--panel); border-bottom: 1px solid var(--line); padding: 1rem; overflow-x: auto; }
+.ego svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.ego svg .box { cursor: pointer; }
+.ego svg .box rect { fill: var(--bg); stroke-width: 1.5; }
+.ego svg .box:hover rect { stroke-width: 3; }
+.ego svg .box text { fill: var(--fg); font: 600 12px ui-monospace, Consolas, monospace; pointer-events: none; }
+.ego svg .box text.sub { fill: var(--muted); font-weight: 400; font-size: 10px; }
+.ego svg .edge { fill: none; stroke: var(--muted); stroke-width: 1.2; opacity: .55; }
+.ego svg .colhead { fill: var(--muted); font: 600 10px system-ui; letter-spacing: .08em; }
+.ego .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 1.5rem; }
+
+.exbar { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem 1rem; border-bottom: 1px solid var(--line); align-items: center; }
+.exbar input, .exbar select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 7px; padding: .4rem .6rem; font: inherit; font-size: .87rem;
+}
+.exbar input { flex: 1 1 190px; min-width: 0; }
+.exbar .count { color: var(--muted); font-size: .8rem; margin-left: auto; }
+
+.nodelist { max-height: 340px; overflow-y: auto; }
+.nodelist button {
+  display: flex; width: 100%; gap: .6rem; align-items: baseline; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--line);
+  padding: .5rem .9rem; color: var(--fg); font: inherit; font-size: .87rem; cursor: pointer;
+}
+.nodelist button:hover { background: var(--panel); }
+.nodelist button[aria-current="true"] { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); }
+.nodelist .np { color: var(--muted); font-size: .76rem; font-family: ui-monospace, Consolas, monospace; }
+.nodelist .deg { margin-left: auto; color: var(--muted); font-size: .74rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.swatch { width: .55rem; height: .55rem; border-radius: 2px; flex: none; align-self: center; }
+.trunc { color: var(--warn); font-size: .78rem; padding: .5rem .9rem; }
+
+footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- HEADER (unnumbered): name, one-line purpose, stack badges, SHA + date -->
+<header>
+  <h1>{{PROJECT}}</h1>
+  <p class="purpose">{{ONE_LINE_PURPOSE}}</p>
+  <div class="badges">
+    <span class="badge">{{LANG}}</span><span class="badge">{{FRAMEWORK}}</span><span class="badge">{{DATASTORE}}</span>
+  </div>
+  <div class="stamp">Generated {{DATE}} from <code>{{SHA}}</code> on <code>{{BRANCH}}</code></div>
+</header>
+
+<!-- 1. AT A GLANCE: counts you actually measured, not estimates -->
+<section>
+  <h2>At a glance</h2>
+  <div class="tiles">
+    <div class="tile"><div class="n">{{N}}</div><div class="l">Tracked files</div></div>
+    <div class="tile"><div class="n">{{N}}</div><div class="l">Surfaces</div></div>
+    <div class="tile"><div class="n">{{N}}</div><div class="l">External services</div></div>
+    <div class="tile"><div class="n">{{N}}</div><div class="l">Migrations</div></div>
+  </div>
+</section>
+
+<!-- 2. SYSTEM CONTEXT: the project and everything outside it. Inline SVG if you need real arrows. -->
+<section>
+  <h2>System context</h2>
+  <div class="layers">
+    <div class="layer"><div class="name">Inbound</div><div class="nodes">
+      <div class="node">Browser<small>{{surface}}</small></div>
+    </div></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><div class="name">{{PROJECT}}</div><div class="nodes">
+      <div class="node">{{process}}<small>{{entrypoint file}}</small></div>
+    </div></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><div class="name">Outbound</div><div class="nodes">
+      <div class="node">{{service}}<small>{{client file}}</small></div>
+    </div></div>
+  </div>
+</section>
+
+<!-- 3. SURFACES: everything that can call in -->
+<section>
+  <h2>Surfaces</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Entry point</th><th>Kind</th><th>Handler</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>{{route}}</code></td><td>HTTP</td><td><span class="ev">{{path:line}}</span></td><td>{{what it does}}</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 4. MODULE MAP: layers from imports, not folders. Mark reversed edges with class="violation". -->
+<section>
+  <h2>Module map</h2>
+  <div class="layers">
+    <div class="layer"><div class="name">Presentation</div><div class="nodes">
+      <div class="node">{{dir}}<small>{{n}} files</small></div>
+    </div></div>
+    <div class="arrow">&darr; depends on</div>
+    <div class="layer"><div class="name">Domain</div><div class="nodes">
+      <div class="node">{{dir}}<small>{{n}} files</small></div>
+    </div></div>
+    <div class="arrow">&darr; depends on</div>
+    <div class="layer"><div class="name">Data</div><div class="nodes">
+      <div class="node">{{dir}}<small>{{n}} files</small></div>
+    </div></div>
+  </div>
+</section>
+
+<!--
+  5. DEPENDENCY EXPLORER
+  Fill the JSON below from real import statements. Every node needs a `path` - it is the evidence.
+  kind: module | class | service | store   layer: your own layer names, colour is assigned per layer.
+  edges: [from, to] means "from depends on to".
+-->
+<section>
+  <h2>Dependency explorer</h2>
+  <p class="purpose">Click any node to re-centre. Left column depends on the focus; the focus depends on the right column.</p>
+  <div class="explorer">
+    <div class="ego" id="ego"></div>
+    <div class="exbar">
+      <input id="q" type="search" placeholder="Filter nodes..." aria-label="Filter nodes">
+      <select id="layerSel" aria-label="Filter by layer"><option value="">All layers</option></select>
+      <select id="sortSel" aria-label="Sort nodes">
+        <option value="fanin">Most depended on</option>
+        <option value="fanout">Most dependencies</option>
+        <option value="name">Name</option>
+      </select>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="nodelist" id="list"></div>
+  </div>
+</section>
+
+<script type="application/json" id="graph">
+{
+  "nodes": [
+    {"id": "ui",   "label": "{{Module}}", "path": "src/components", "layer": "Presentation", "kind": "module", "loc": 0},
+    {"id": "svc",  "label": "{{Module}}", "path": "src/lib",        "layer": "Domain",       "kind": "module", "loc": 0},
+    {"id": "repo", "label": "{{Module}}", "path": "src/db",         "layer": "Data",         "kind": "module", "loc": 0}
+  ],
+  "edges": [["ui", "svc"], ["svc", "repo"]]
+}
+</script>
+
+<script>
+(function () {
+  var raw = document.getElementById('graph');
+  if (!raw) return;
+  var G;
+  try { G = JSON.parse(raw.textContent); } catch (e) { return; }
+  var nodes = G.nodes || [], edges = G.edges || [];
+  if (!nodes.length) return;
+
+  // Mid-tone palette: legible on both light and dark backgrounds.
+  var PALETTE = ['#5b8def', '#38a169', '#d08b2c', '#c2557a', '#7d6bd0', '#4aa8b8'];
+  var layers = [];
+  nodes.forEach(function (n) { if (layers.indexOf(n.layer) < 0) layers.push(n.layer); });
+  function colour(n) { return PALETTE[Math.max(0, layers.indexOf(n.layer)) % PALETTE.length]; }
+
+  var byId = {}, out = {}, inc = {};
+  nodes.forEach(function (n) { byId[n.id] = n; out[n.id] = []; inc[n.id] = []; });
+  edges.forEach(function (e) {
+    var a = e[0], b = e[1];
+    if (byId[a] && byId[b] && out[a].indexOf(b) < 0) { out[a].push(b); inc[b].push(a); }
+  });
+
+  var MAX_SIDE = 10, COL = 190, GAP = 92, ROW = 46, PAD = 26;
+  var focus = nodes[0].id;
+  var egoEl = document.getElementById('ego'),
+      listEl = document.getElementById('list'),
+      qEl = document.getElementById('q'),
+      layerEl = document.getElementById('layerSel'),
+      sortEl = document.getElementById('sortSel'),
+      countEl = document.getElementById('count');
+
+  layers.forEach(function (l) {
+    var o = document.createElement('option'); o.value = l; o.textContent = l; layerEl.appendChild(o);
+  });
+
+  function el(tag, attrs) {
+    var e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function box(svg, n, x, y) {
+    var g = el('g', { class: 'box', tabindex: '0', role: 'button' });
+    g.appendChild(el('rect', { x: x, y: y, width: COL, height: 38, rx: 7, stroke: colour(n) }));
+    var t = el('text', { x: x + 10, y: y + 16 }); t.textContent = n.label;
+    var s = el('text', { x: x + 10, y: y + 30, class: 'sub' }); s.textContent = n.path || n.kind || '';
+    g.appendChild(t); g.appendChild(s);
+    g.addEventListener('click', function () { setFocus(n.id); });
+    g.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setFocus(n.id); }
+    });
+    var title = el('title'); title.textContent = n.path || n.label;
+    g.appendChild(title);
+    svg.appendChild(g);
+    return y + 19; // vertical centre, for edge anchoring
+  }
+
+  function drawEgo() {
+    egoEl.innerHTML = '';
+    var f = byId[focus];
+    var dependents = inc[focus].slice(0, MAX_SIDE);
+    var deps = out[focus].slice(0, MAX_SIDE);
+    var hiddenL = inc[focus].length - dependents.length, hiddenR = out[focus].length - deps.length;
+
+    if (!dependents.length && !deps.length) {
+      egoEl.innerHTML = '<div class="empty"><strong>' + f.label +
+        '</strong> has no recorded edges. Isolated nodes are usually entry points, or a gap in the import scan.</div>';
+      return;
+    }
+
+    var rows = Math.max(dependents.length, deps.length, 1);
+    var H = Math.max(rows * ROW, 90) + PAD * 2;
+    var W = COL * 3 + GAP * 2;
+    var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, width: W, height: H,
+                          role: 'img', 'aria-label': 'Dependency neighbourhood of ' + f.label });
+
+    var heads = [['DEPENDS ON THIS', 0], ['FOCUS', COL + GAP], ['THIS DEPENDS ON', (COL + GAP) * 2]];
+    heads.forEach(function (h) {
+      var t = el('text', { x: h[1], y: 14, class: 'colhead' }); t.textContent = h[0]; svg.appendChild(t);
+    });
+
+    function colY(i, count) { return PAD + (H - PAD * 2 - count * ROW) / 2 + i * ROW; }
+    var cy = box(svg, f, COL + GAP, PAD + (H - PAD * 2 - 38) / 2);
+
+    // Edges drawn before boxes would be cleaner, but boxes carry their own fill so overlap is fine.
+    dependents.forEach(function (id, i) {
+      var y = box(svg, byId[id], 0, colY(i, dependents.length));
+      var mid = (COL + (COL + GAP)) / 2;
+      svg.insertBefore(el('path', { class: 'edge',
+        d: 'M ' + COL + ' ' + y + ' C ' + mid + ' ' + y + ', ' + mid + ' ' + cy + ', ' + (COL + GAP) + ' ' + cy }), svg.firstChild);
+    });
+    deps.forEach(function (id, i) {
+      var y = box(svg, byId[id], (COL + GAP) * 2, colY(i, deps.length));
+      var x1 = COL + GAP + COL, x2 = (COL + GAP) * 2, mid = (x1 + x2) / 2;
+      svg.insertBefore(el('path', { class: 'edge',
+        d: 'M ' + x1 + ' ' + cy + ' C ' + mid + ' ' + cy + ', ' + mid + ' ' + y + ', ' + x2 + ' ' + y }), svg.firstChild);
+    });
+
+    egoEl.appendChild(svg);
+    // Never hide truncation silently - a capped fan-in reads as a small one otherwise.
+    if (hiddenL > 0 || hiddenR > 0) {
+      var w = document.createElement('div');
+      w.className = 'trunc';
+      w.textContent = 'Showing ' + MAX_SIDE + ' per side. ' +
+        (hiddenL > 0 ? hiddenL + ' more depend on this. ' : '') +
+        (hiddenR > 0 ? hiddenR + ' more dependencies hidden.' : '');
+      egoEl.appendChild(w);
+    }
+  }
+
+  function drawList() {
+    var q = qEl.value.trim().toLowerCase(), lf = layerEl.value, sort = sortEl.value;
+    var rows = nodes.filter(function (n) {
+      if (lf && n.layer !== lf) return false;
+      if (!q) return true;
+      return (n.label + ' ' + (n.path || '') + ' ' + (n.kind || '')).toLowerCase().indexOf(q) >= 0;
+    });
+    rows.sort(function (a, b) {
+      if (sort === 'name') return a.label.localeCompare(b.label);
+      if (sort === 'fanout') return out[b.id].length - out[a.id].length;
+      return inc[b.id].length - inc[a.id].length;
+    });
+
+    countEl.textContent = rows.length + ' / ' + nodes.length + ' nodes';
+    listEl.innerHTML = '';
+    rows.forEach(function (n) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      if (n.id === focus) b.setAttribute('aria-current', 'true');
+      var sw = document.createElement('span');
+      sw.className = 'swatch'; sw.style.background = colour(n);
+      var lb = document.createElement('span'); lb.textContent = n.label;
+      var p = document.createElement('span'); p.className = 'np'; p.textContent = n.path || '';
+      var d = document.createElement('span'); d.className = 'deg';
+      d.textContent = '←' + inc[n.id].length + '  →' + out[n.id].length;
+      d.title = inc[n.id].length + ' depend on this, this depends on ' + out[n.id].length;
+      b.appendChild(sw); b.appendChild(lb); b.appendChild(p); b.appendChild(d);
+      b.addEventListener('click', function () { setFocus(n.id); });
+      listEl.appendChild(b);
+    });
+  }
+
+  function setFocus(id) { focus = id; drawEgo(); drawList(); }
+
+  qEl.addEventListener('input', drawList);
+  layerEl.addEventListener('change', drawList);
+  sortEl.addEventListener('change', drawList);
+  setFocus(focus);
+})();
+</script>
+
+<!-- 6. DATA -->
+<section>
+  <h2>Data</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Store</th><th>Holds</th><th>Accessed via</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>{{store}}</td><td>{{entities}}</td><td>{{ORM/client}}</td><td><span class="ev">{{path:line}}</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 7. INTEGRATIONS: one row per third party, with the flag/var that switches it on -->
+<section>
+  <h2>Integrations</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Service</th><th>Purpose</th><th>Config</th><th>Code path</th></tr></thead>
+    <tbody>
+      <tr><td>{{service}}</td><td>{{why}}</td><td><code>{{ENV_VAR}}</code></td><td><span class="ev">{{path:line}}</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 8. PIPELINE: source to running process, and the gates -->
+<section>
+  <h2>Pipeline</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Stage</th><th>Runs</th><th>Gate</th><th>Defined in</th></tr></thead>
+    <tbody>
+      <tr><td>{{stage}}</td><td><code>{{command}}</code></td><td>{{blocking?}}</td><td><span class="ev">{{path:line}}</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 9. FINDINGS: risks and health. Every one carries evidence or it does not belong here. -->
+<section>
+  <h2>Findings</h2>
+  <div class="finding risk">
+    <div class="t">{{finding}}</div>
+    <p>{{what breaks, concretely}}</p>
+    <span class="ev">{{path:line}}</span>
+  </div>
+  <div class="finding warn">
+    <div class="t">{{finding}} <span class="inferred"></span></div>
+    <p>{{why this is only pattern-matched, not read}}</p>
+    <span class="ev">{{path:line}}</span>
+  </div>
+</section>
+
+<!-- 10. GAPS: required, even when short. What was not examined, and what got demoted. -->
+<section>
+  <h2>Gaps</h2>
+  <ul>
+    <li>{{area not examined, and why}}</li>
+    <li>{{claim dropped for lack of evidence}}</li>
+  </ul>
+</section>
+
+<footer>
+  Generated by the <code>mapping-architecture</code> skill. Claims cite the source read at
+  <code>{{SHA}}</code>; anything marked INFERRED was pattern-matched, not verified.
+</footer>
+
+</div>
+</body>
+</html>
