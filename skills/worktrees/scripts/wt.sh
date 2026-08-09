@@ -3,7 +3,7 @@
 # Usage: ./wt.sh <command> [args]   |   ./wt.sh help
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 
 # ---------------------------------------------------------------- helpers
 

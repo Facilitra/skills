@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'   # git warns on stderr; we check $LASTEXITCODE instead
-$script:Version = '1.1.0'
+$script:Version = '1.1.1'
 $script:Reserved = @('con','prn','aux','nul') + (1..9 | ForEach-Object { "com$_"; "lpt$_" })
 
 # ---------------------------------------------------------------- helpers

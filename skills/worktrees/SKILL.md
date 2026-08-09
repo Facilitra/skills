@@ -15,21 +15,31 @@ They ship beside this file, which is **not** the directory you are working in. R
 
 ```bash
 # bash / Git Bash / WSL / macOS
-WT=$(ls "$CLAUDE_PLUGIN_ROOT"/skills/worktrees/scripts/wt.sh \
-        ~/.claude/plugins/marketplaces/*/skills/worktrees/scripts/wt.sh \
-        skills/worktrees/scripts/wt.sh 2>/dev/null | head -1)
+WT=$( { ls -d "$CLAUDE_PLUGIN_ROOT"/skills/worktrees/scripts/wt.sh 2>/dev/null
+        ls -dt ~/.claude/plugins/cache/*/*/*/skills/worktrees/scripts/wt.sh 2>/dev/null
+        ls -d ~/.claude/plugins/marketplaces/*/skills/worktrees/scripts/wt.sh 2>/dev/null
+        ls -d skills/worktrees/scripts/wt.sh 2>/dev/null; } | head -1 )
 ```
 
 ```powershell
 # PowerShell
-$wt = @("$env:CLAUDE_PLUGIN_ROOT\skills\worktrees\scripts\wt.ps1",
-        "$HOME\.claude\plugins\marketplaces\*\skills\worktrees\scripts\wt.ps1",
-        'skills\worktrees\scripts\wt.ps1') |
-      ForEach-Object { Get-ChildItem $_ -EA SilentlyContinue } |
-      Select-Object -First 1 -ExpandProperty FullName
+$wt = @(
+  Get-ChildItem "$env:CLAUDE_PLUGIN_ROOT\skills\worktrees\scripts\wt.ps1" -EA SilentlyContinue
+  Get-ChildItem "$HOME\.claude\plugins\cache\*\*\*\skills\worktrees\scripts\wt.ps1" -EA SilentlyContinue |
+    Sort-Object LastWriteTime -Descending
+  Get-ChildItem "$HOME\.claude\plugins\marketplaces\*\skills\worktrees\scripts\wt.ps1" -EA SilentlyContinue
+  Get-ChildItem 'skills\worktrees\scripts\wt.ps1' -EA SilentlyContinue
+) | Select-Object -First 1 -ExpandProperty FullName
 ```
 
-The last candidate in each list covers working inside this repo itself. If none resolves, skip to *If the scripts are unavailable* at the bottom rather than improvising a path.
+The order is deliberate, because these four locations can hold **different versions at the same time**:
+
+1. `$CLAUDE_PLUGIN_ROOT`, when the harness sets it, names the exact installed plugin. Nothing beats it.
+2. `plugins/cache/<marketplace>/<plugin>/<version>/` is where an installed version actually lives, and this file was loaded from there. Old versions are kept alongside the current one, so the glob is sorted newest-installed-first rather than alphabetically: a plain glob returns `1.0.0` before `1.1.0`, and `1.10.0` before `1.9.0`.
+3. `plugins/marketplaces/<marketplace>/` is a plain git clone of whatever the default branch currently is. That can be *ahead* of the version installed here, which would pair a newer script with these older instructions.
+4. The relative path covers working inside the skills repo itself.
+
+If none resolves, skip to *If the scripts are unavailable* at the bottom rather than improvising a path.
 
 ## Golden rule
 
