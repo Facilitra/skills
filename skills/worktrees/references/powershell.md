@@ -18,7 +18,7 @@ $path = Join-Path 'C:\dev\.worktrees\repo' $name
 git worktree add $path -b fix
 ```
 
-**Better still:** `.\wt.ps1 new "repo-fix"`, which does this and sanitizes the name.
+**Better still:** `& $wt new "repo-fix"`, which does this and sanitizes the name.
 
 ## 2. Carriage returns glued to the path
 
@@ -33,7 +33,13 @@ Git output on Windows can carry `\r`. A name ending in `\r` looks normal in the 
 
 ## 3. Mixed `/` and `\` separators
 
-Git accepts both separators, but `git worktree list` returns the canonical form, which may not match the string you used at creation time. Comparing paths as plain text then fails (which is why `wt.ps1` normalizes with `[System.IO.Path]::GetFullPath()` before comparing). Use `Join-Path`, never `+ '/' +` concatenation.
+Git accepts both separators, but on Windows **`git worktree list --porcelain` answers with forward slashes** (`C:/dev/repo`) while every PowerShell path API produces backslashes (`C:\dev\repo`). Comparing the two as plain text always fails.
+
+This is not theoretical. It shipped: `wt.ps1` compared raw git output against a backslash root, so `in_root` was permanently false. Every correctly placed worktree was reported `OUTSIDE-ROOT` by `list`, then `MISPLACED` **and** `ORPHAN` by `doctor`, `doctor --fix` tried to `git worktree move` each one onto itself forever, and `new` refused to reuse an existing worktree because the registered-path check never matched. One missing conversion, four broken commands, and a diagnostic tool that reported nothing but false positives.
+
+Every path coming out of git is now funnelled through `ConvertTo-FullPath` (which wraps `[System.IO.Path]::GetFullPath()`) the moment it is parsed, in `Get-WorktreePaths` and `Get-MainWorktree`, so no caller ever sees the mixed form. Normalize at the boundary, not at each comparison: the comparison you forget is the one that breaks.
+
+Use `Join-Path`, never `+ '/' +` concatenation.
 
 ## 4. `&&` and `||` in PowerShell 5.1
 
@@ -89,19 +95,39 @@ Options, least to most invasive: shorten the root with `$env:AGENT_WT_ROOT = 'C:
 If `wt.ps1` will not start because of the execution policy, do not change the policy globally on your own initiative. Run the script for one session:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\wt.ps1 list
+powershell -ExecutionPolicy Bypass -File $wt list
 ```
 
 If the user wants something permanent, it is their call: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ## 9. Quick check before trusting it
 
-On a fresh machine, the smoke test is three commands that change nothing:
+On a fresh machine, the smoke test is three commands that change nothing (`$wt` resolved as in SKILL.md):
 
 ```powershell
-.\scripts\wt.ps1 root
-.\scripts\wt.ps1 list
-.\scripts\wt.ps1 doctor
+& $wt root
+& $wt list
+& $wt doctor
 ```
 
-If all three answer with sensible paths, the rest of the flow will work.
+Read the output, do not just check that it ran. All three exit 0 even when the answers are nonsense, which is exactly how the separator bug in section 3 survived: the failing state was a clean exit and a confidently wrong report. Specifically:
+
+- `root` must name a directory outside the repo.
+- `list` must **not** mark a worktree under that root as `OUTSIDE-ROOT`.
+- `doctor` on a repo whose worktrees were all made with `wt new` must say `all clear`.
+
+Section 10 automates exactly this.
+
+## 10. The regression test
+
+`.github/workflows/smoke.yml` runs the full lifecycle (`new`, reuse, reserved name, `list`, `doctor`, refuse-dirty, `rm` from inside the worktree, `clean` dry run, `clean --yes`) against both scripts, on Windows, Linux and macOS. It asserts on the text the commands print, not merely on exit codes.
+
+Add a case there before fixing any bug you find in these scripts. Every defect listed in this file was invisible to an exit-code check.
+
+## 11. Deleting the directory you are standing in
+
+Windows locks a directory that is any process's working directory. `Set-Location` into a worktree, then try to remove it, and git fails with `Permission denied` on a path that is otherwise perfectly deletable. POSIX shells allow this, so the same sequence works under Git Bash and WSL and fails only on native PowerShell, which makes it easy to miss.
+
+`Cmd-Remove` handles it: if the current location is at or under the worktree being removed, it moves back to the main repo first (setting both the PowerShell location and `[Environment]::CurrentDirectory`, since git is a child process that inherits the latter) and says so. Doing it by hand means `Set-Location` somewhere else before calling `git worktree remove`.
+
+Same family of problem: the registry entry's path is now computed *before* the removal, because resolving it walks up through the repo root, and once cwd has been deleted that lookup fails and the entry is orphaned.
