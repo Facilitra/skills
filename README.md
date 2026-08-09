@@ -4,33 +4,35 @@ Source of truth for shared [Claude Code](https://claude.com/claude-code) skills.
 
 | Skill | What it does |
 |---|---|
-| [`worktrees`](worktrees/) | Create, use and clean up git worktrees in a fixed location with sanitized names and guaranteed removal. |
-| [`mapping-architecture`](mapping-architecture/) | Map, document and diagram a codebase's architecture into an HTML report. |
+| [`worktrees`](skills/worktrees/) | Create, use and clean up git worktrees in a fixed location with sanitized names and guaranteed removal. |
+| [`mapping-architecture`](skills/mapping-architecture/) | Map, document and diagram a codebase's architecture into an HTML report. |
 
 ## Install
 
-Clone anywhere, then link each skill into your Claude skills directory.
+This repo is a Claude Code plugin marketplace. In Claude Code:
 
-**Windows (PowerShell):**
+```
+/plugin marketplace add Facilitra/skills
+/plugin install facilitra-skills@facilitra
+```
 
-```powershell
-git clone https://github.com/Facilitra/skills.git $HOME\projects\skills
-foreach ($s in 'worktrees','mapping-architecture') {
-  New-Item -ItemType Junction -Path "$HOME\.claude\skills\$s" -Target "$HOME\projects\skills\$s"
+Update to the latest published version with `/plugin marketplace update facilitra`.
+
+To install for everyone on a project automatically, commit this to the project's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "facilitra": {
+      "source": { "source": "github", "repo": "Facilitra/skills" }
+    }
+  },
+  "enabledPlugins": { "facilitra-skills@facilitra": true }
 }
 ```
 
-**macOS / Linux:**
-
-```bash
-git clone https://github.com/Facilitra/skills.git ~/projects/skills
-for s in worktrees mapping-architecture; do
-  ln -s ~/projects/skills/$s ~/.claude/skills/$s
-done
-```
-
-`git pull` updates every linked skill. Remove an existing `~/.claude/skills/<name>` directory first if one is in the way.
-
 ## Contributing
 
-Edit here, commit, push. Never edit the copy under `~/.claude/skills/` — it is a link.
+Edit here, commit, push, and bump `version` in `.claude-plugin/marketplace.json` — installed copies only update when that string changes.
+
+Do not keep a hand-copied or symlinked duplicate under `~/.claude/skills/`; it shadows the plugin copy.

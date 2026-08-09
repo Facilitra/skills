@@ -1,0 +1,20 @@
+{
+  "name": "facilitra",
+  "owner": {
+    "name": "Facilitra",
+    "url": "https://github.com/Facilitra"
+  },
+  "description": "Shared Claude Code skills for Facilitra",
+  "plugins": [
+    {
+      "name": "facilitra-skills",
+      "source": "./",
+      "description": "Git worktree management and architecture mapping skills",
+      "version": "1.0.0",
+      "author": { "name": "Facilitra" },
+      "repository": "https://github.com/Facilitra/skills",
+      "skills": ["./skills/worktrees", "./skills/mapping-architecture"],
+      "strict": false
+    }
+  ]
+}
