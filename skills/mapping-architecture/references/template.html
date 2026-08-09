@@ -444,13 +444,18 @@ footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--line
   </table></div>
 </section>
 
-<!-- 8. PIPELINE: source to running process, and the gates -->
+<!--
+  8. PIPELINE: source to running process, and the gates.
+  Gate is three-state, never yes/no: "blocks" (a failure stops the merge or deploy), "runs"
+  (executes, nothing depends on the result), "exists" (never fires on the path that matters).
+  A green workflow that is not a required status check is "runs". See probes.md, Gate audit.
+-->
 <section>
   <h2>Pipeline</h2>
   <div class="scroll"><table>
     <thead><tr><th>Stage</th><th>Runs</th><th>Gate</th><th>Defined in</th></tr></thead>
     <tbody>
-      <tr><td>{{stage}}</td><td><code>{{command}}</code></td><td>{{blocking?}}</td><td><span class="ev">{{path:line}}</span></td></tr>
+      <tr><td>{{stage}}</td><td><code>{{command}}</code></td><td>{{blocks | runs | exists}}</td><td><span class="ev">{{path:line}}</span></td></tr>
     </tbody>
   </table></div>
 </section>

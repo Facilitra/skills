@@ -160,6 +160,14 @@ Then the analysers the repo lacks. All are one-shot, machine-readable, and leave
 | Dead code | `npx -y knip --reporter json` | `vulture .` | `deadcode ./...` | `cargo +nightly udeps` |
 | Duplication | `npx -y jscpd --min-lines 25 --min-tokens 80 --reporters consoleFull --ignore "**/__tests__/**" src` | same (`jscpd` is language-agnostic) | same | same |
 | Complexity | `npx -y typhonjs-escomplex` or file length | `radon cc -s -a` | `gocyclo -over 15 .` | `cargo clippy::cognitive_complexity` |
+| Vulnerable deps | `npm audit --json` (or `pnpm`/`yarn audit`) | `pip-audit` | `govulncheck ./...` | `cargo audit` |
+| Committed secrets | `gitleaks detect --no-banner` (language-agnostic; scans history, not just the worktree) | same | same | same |
+
+The last two rows answer "which gates is this repo missing", which is a different question from "which
+gates does it have". Report a vulnerability count only with its severity split and whether a fix
+version exists: a bare "23 vulnerabilities" is the same ungrounded integer the Evidence Rule rejects,
+and transitive dev-only advisories dominate that number on most repos. `gitleaks` scans history, so a
+hit may be an already-rotated key; say which, or it reads as a live credential.
 
 `jscpd` covers duplication for every language, which is the one metric usually reached for SonarQube.
 Its flags drift between releases - it is `--reporters` (plural), `--ignore` takes one comma-separated
@@ -179,14 +187,77 @@ this skill exists to prevent. Same caution for reversed edges in the module grap
 Change hotspots need no tooling at all: intersect the churn list (Universal) with the >500-line list
 (Health). A file in both is where complexity and change rate compound, and it belongs in Findings.
 
-**Gate audit** - which gates exist is section 8; which of them actually block is a finding:
+## Gate audit
+
+Which gates exist is section 8. Whether they block is a Findings claim, and it has three states, not
+two. Most wrong gate findings come from collapsing the middle one into "has CI, therefore protected".
+
+| State | Means | What proves it |
+|---|---|---|
+| **blocks** | a failure stops the merge or the deploy | named in required status checks, or in `needs:` of the deploying job |
+| **runs** | executes and reports, nothing depends on the result | present in the workflow, absent from branch protection |
+| **exists** | configured but never executes on the path that matters | trigger, `if:` or `paths:` filter excludes the change |
+
+### The loud bypasses, which grep finds
 
 ```bash
-rg -n 'continue-on-error|\|\| true|allow_failure|--passWithNoTests|--no-verify|\|\| exit 0' \
+rg -n 'continue-on-error|\|\| true|\|\| :|allow_failure|--passWithNoTests|--no-verify|\|\| exit 0|set \+e' \
   .github .gitlab-ci.yml Makefile package.json 2>/dev/null
 ```
 
-A gate that cannot fail the build is not a gate. Name each one in Findings with its file and line.
+`|| :` and `set +e` are the two usually missed: `:` is a shell builtin that always succeeds, and
+`set +e` disables the exit-on-error for every remaining line of the step, not just the next one.
+
+### The quiet ones, which grep cannot see
+
+These are structural. Each one produces a green check that gates nothing:
+
+- **Not a required check.** The single most important question, and it is not answerable from the repo
+  contents at all. A workflow can pass on every PR while nothing requires it to.
+- **Push-only trigger.** `on: push` without `pull_request` means the gate reports after the merge.
+- **`paths:` / `paths-ignore:` filters** that exclude the very files a change touches.
+- **A job absent from the deploy job's `needs:`.** It runs beside the deploy, not before it.
+- **`if:` conditions that are never true** on the branch or event that matters.
+- **A test runner with no tests.** `--passWithNoTests`, or a suite whose glob matches nothing, exits 0
+  forever. Check that the run actually reported a non-zero test count.
+- **A coverage threshold of 0**, or a `coverageThreshold` block that is present but commented out.
+- **Pre-commit hooks are not CI gates.** They are local, opt-in per clone, and `--no-verify` skips
+  them. A repo whose only "gate" is `.pre-commit-config.yaml` has no gate.
+
+### Ask GitHub, and do not trust a 404
+
+```bash
+gh api "repos/{owner}/{repo}/branches/main/protection" --jq '.required_status_checks.contexts'
+gh api "repos/{owner}/{repo}/rulesets" --jq '.[] | {name, target, enforcement}'
+gh api "repos/{owner}/{repo}/rulesets/<id>" --jq '{rules: [.rules[].type]}'
+```
+
+**The classic protection endpoint returns `404 Branch not protected` for branches that are in fact
+protected by a ruleset.** Rulesets are a separate, newer mechanism and they do not appear in that
+response. Reading the 404 as "no protection" is a wrong finding in the safe-looking direction, so
+query both and report what each said.
+
+The rule you are looking for inside a ruleset is `required_status_checks`. A ruleset carrying only
+`pull_request`, `deletion` and `non_fast_forward` requires review and blocks force-pushes, but lets a
+pull request merge with every check red. That combination is common, it looks fully protected in the
+GitHub UI, and it is the exact shape of the middle row above.
+
+### Prove it by breaking it
+
+A gate that has never failed is a hypothesis. The skill already holds that a claim about failure
+behaviour is verified only by causing the failure, and gates are the clearest case: run the gate's own
+command against deliberately bad input in a scratch file and check the exit code.
+
+```bash
+printf 'const x:number = "nope"\n' > /tmp/gate-probe.ts   # then run the repo's typecheck
+echo "exit=$?"   # 0 means the gate cannot fail, whatever the workflow says
+```
+
+Delete the scratch file afterwards and never commit it. If running the gate is too slow or needs
+credentials, say so in Gaps and mark the claim `inferred` rather than asserting it blocks.
+
+A gate that cannot fail the build is not a gate. Name each one in Findings with its file and line, and
+state which of the three rows above it lands in.
 
 Evidence for a tool-derived finding is still a path - cite the worst offender the tool named, not the
 tool. Name the command in the finding's prose so a reader can re-run it. A tool that errored out is a

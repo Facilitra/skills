@@ -90,6 +90,32 @@ enforceable rather than merely stated, since a later run lands beside the old on
 you to patch it. Check that the repo ignores the pattern (`/architecture-*.html`), not just the bare
 `architecture.html`, or every snapshot shows up as untracked noise.
 
+**Copy the file. Never emit it.** The template is around 490 lines of HTML, CSS and JavaScript, none
+of which the reader needs to see. Writing the finished page through a write tool dumps all of it into
+their terminal, and again on every correction. Copy it with a shell command, then fill the
+placeholders with targeted edits:
+
+```bash
+SHA=$(git rev-parse --short HEAD)
+cp "$SKILL_DIR/references/template.html" "architecture-$SHA.html"
+```
+
+`$SKILL_DIR` is the base directory reported when this skill loaded. If you do not have it:
+
+```bash
+SKILL_DIR=$( { ls -d "$CLAUDE_PLUGIN_ROOT"/skills/mapping-architecture 2>/dev/null
+               ls -dt ~/.claude/plugins/cache/*/*/*/skills/mapping-architecture 2>/dev/null
+               ls -d ~/.claude/plugins/marketplaces/*/skills/mapping-architecture 2>/dev/null
+               ls -d skills/mapping-architecture 2>/dev/null; } | head -1 )
+```
+
+Then one edit per section, replacing the placeholder block with real content. The diffs stay small and
+reviewable, and the reader watches the page fill in section by section instead of scrolling past a
+wall of markup. The graph JSON is one edit; the explorer's JavaScript is never touched at all.
+
+This applies to every later change too. Re-emitting the whole page to fix one table cell is the same
+dump a second time.
+
 **The page is a snapshot of one commit, and it is frozen at handoff.** The header stamps a SHA, so
 every claim in it is a claim about that tree. Two rules follow:
 
@@ -116,7 +142,8 @@ Section order is the contract. Do not reorder. Do not add a section with no veri
 5. **Dependency explorer** - the interactive graph, see below
 6. **Data** - stores, key entities, migration mechanism
 7. **Integrations** - table: service, purpose, config var, code path
-8. **Pipeline** - build, test, deploy, and the gates, marking any gate that cannot fail the build
+8. **Pipeline** - build, test, deploy, and the gates, each marked blocks / runs / exists (see the Gate
+   audit in `references/probes.md`), never a bare yes-or-no
 9. **Findings** - risks and health observations, each with its evidence link
 10. **Gaps** - what was not examined, plus every claim demoted for lack of evidence
 
@@ -125,6 +152,23 @@ Section 10 is required even when short. A page hiding its own blind spots is wor
 ### 5. Offer to publish
 
 The page is a local file. State the path. If the user wants a shareable URL, load `artifact-design` if available, then make a body-only copy - strip `<!doctype>`, `<html>`, `<head>`, `<body>`, keep the `<style>` block - and publish that with the Artifact tool. Where there is no Artifact tool, the local file is the deliverable; say so instead of looking for somewhere to host it.
+
+Strip the wrapper with a shell command, for the same reason as step 4: piping the page back through
+your own output to delete six lines is a second full dump.
+
+```bash
+sed -e '/^<!doctype/Id' -e '/^<html/Id' -e '/^<head>/Id' -e '/^<\/head>/Id' \
+    -e '/^<body>/Id' -e '/^<\/body>/Id' -e '/^<\/html>/Id' \
+    "architecture-$SHA.html" > /tmp/artifact-body.html
+```
+
+That leaves the `<meta>` and `<title>` lines that lived in the head, which is deliberate: the Artifact
+tool reads the `<title>` to name the page, and the metas are harmless once it supplies its own wrapper.
+Everything else, `<style>` included, is preserved in place.
+
+Check the first and last lines of the result before publishing. The template deliberately spells those
+tag names out in prose inside its own comments rather than writing them literally, so this pass does
+not eat its own documentation, but a page you have edited heavily deserves the look.
 
 ## The dependency explorer
 
@@ -188,4 +232,7 @@ The template ships CSS for layered box diagrams, which covers most layer and mod
 - Health findings that are all grep, when the repo ships a lint and typecheck script you never ran
 - A severity that rests on how a third-party library behaves when misconfigured, which you never ran
 - Reporting a tool's headline number (cycles, clones, vulnerabilities) without classifying its items
+- Calling CI a gate without checking whether anything requires it to pass
+- Reading `404 Branch not protected` as "unprotected" without also querying rulesets
+- Emitting the whole page through a write tool instead of copying the template and editing it
 - Editing a delivered page to say a finding is now fixed, instead of regenerating it at the new SHA
